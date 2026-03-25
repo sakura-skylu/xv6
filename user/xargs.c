@@ -15,7 +15,7 @@ int main(int argc, char *argv[]) {
 
     for(i = 1; i < argc; i++) {
         newargv[i - 1] = argv[i];
-    }
+    }//去掉xargs
 
     j = 0;
     while(read(0, &c, 1) == 1) {

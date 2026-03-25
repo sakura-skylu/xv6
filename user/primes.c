@@ -24,11 +24,11 @@ void sieve(int leftfd){
     }else{
         close(p[0]);
         while((read(leftfd,&num,sizeof(int)))>0){
-            //必须处理管道缓冲区的“所有输入数据”
+            //必须处理管道缓冲区的所有输入数据
             if(num%prime!=0){
                 write(p[1],&num,sizeof(int)); 
             }
-        }//把那些“不能被 prime 整除”的数，发给下一层
+        }//把那些不能被 prime 整除的数，发给下一层
         close(leftfd);
         close(p[1]);
         wait(0);
