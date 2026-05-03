@@ -303,6 +303,32 @@ uvmfree(pagetable_t pagetable, uint64 sz)
   freewalk(pagetable);
 }
 
+int
+cow_alloc(pagetable_t pg,uint64 va)
+{
+  pte_t *pte;
+  uint64 pa;
+  uint flags;
+  char *mem;
+
+  va = PGROUNDDOWN(va);//得到当前页的基址
+  pte = walk(pg, va, 0);
+  pa = PTE2PA(*pte);
+  flags = PTE_FLAGS(*pte);
+
+  if(krefcnt(pa) == 1){
+    *pte = (*pte | PTE_W) & ~PTE_COW;
+    return 0;
+  }
+
+  mem = kalloc();
+  memmove(mem,(char*)pa,PGSIZE);
+  *pte = PA2PTE((uint64)mem) | ((flags | PTE_W) & ~PTE_COW);
+
+  kfree((void*)pa);
+
+  return 0;
+}
 // Given a parent process's page table, copy
 // its memory into a child's page table.
 // Copies both the page table and the
@@ -315,22 +341,26 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
+
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
+
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+
+    if(flags & PTE_W){
+      flags = (flags & ~PTE_W) | PTE_COW;
+      *pte = PA2PTE(pa) | flags;
+    }
+
+    if(mappages(new, i, PGSIZE, pa, flags) != 0){
       goto err;
     }
+    krefinc(pa);
   }
   return 0;
 
@@ -366,10 +396,15 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     if(va0 >= MAXVA)
       return -1;
     pte = walk(pagetable, va0, 0);
-    if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 ||
-       (*pte & PTE_W) == 0)
+    if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 || (*pte & PTE_W) == 0)
       return -1;
-    pa0 = PTE2PA(*pte);
+      
+    if(*pte & PTE_COW){
+      if(cow_alloc(pagetable, va0) < 0)
+        return -1;
+    }
+
+    pa0 = walkaddr(pagetable,va0);
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
