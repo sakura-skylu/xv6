@@ -395,16 +395,25 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     va0 = PGROUNDDOWN(dstva);
     if(va0 >= MAXVA)
       return -1;
+
     pte = walk(pagetable, va0, 0);
-    if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 || (*pte & PTE_W) == 0)
+    if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0)
       return -1;
-      
+
+    // Handle COW first: COW pages are intentionally not writable yet.
     if(*pte & PTE_COW){
       if(cow_alloc(pagetable, va0) < 0)
         return -1;
+      // PTE may have changed, re-fetch it.
+      pte = walk(pagetable, va0, 0);
+      if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0)
+        return -1;
     }
 
-    pa0 = walkaddr(pagetable,va0);
+    if((*pte & PTE_W) == 0)
+      return -1;
+
+    pa0 = PTE2PA(*pte);
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
