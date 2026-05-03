@@ -7,9 +7,11 @@
 #include "defs.h"
 #include "e1000_dev.h"
 #include "net.h"
-
+#include <stdlib.h>
 #define TX_RING_SIZE 16
+//描述符的结构
 static struct tx_desc tx_ring[TX_RING_SIZE] __attribute__((aligned(16)));
+//数据包的具体内容
 static struct mbuf *tx_mbufs[TX_RING_SIZE];
 
 #define RX_RING_SIZE 16
@@ -20,7 +22,8 @@ static struct mbuf *rx_mbufs[RX_RING_SIZE];
 static volatile uint32 *regs;
 
 struct spinlock e1000_lock;
-
+struct spinlock e1000_tx_lock;
+struct spinlock e1000_rx_lock;
 // called by pci_init().
 // xregs is the memory address at which the
 // e1000's registers are mapped.
@@ -102,7 +105,31 @@ e1000_transmit(struct mbuf *m)
   // the TX descriptor ring so that the e1000 sends it. Stash
   // a pointer so that it can be freed after sending.
   //
+  acquire(&e1000_lock);
   
+  uint32 idx = regs[E1000_TDT];
+
+  if((tx_ring[idx].status & E1000_TXD_STAT_DD) == 0){
+    release(&e1000_lock);
+    return -1;
+  }
+
+  if(tx_mbufs[idx]){
+    mbuffree(tx_mbufs[idx]);
+    tx_mbufs[idx] = 0;
+  }
+
+  tx_ring[idx].addr = (uint64)m->head;
+  tx_ring[idx].length = m->len;
+  tx_ring[idx].cmd = E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS;
+  tx_ring[idx].status = 0;
+
+  tx_mbufs[idx] = m;
+
+  regs[E1000_TDT] = (idx + 1) % TX_RING_SIZE;
+
+
+  release(&e1000_lock);
   return 0;
 }
 
@@ -115,6 +142,31 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver an mbuf for each packet (using net_rx()).
   //
+  while(1){
+    acquire(&e1000_lock);
+
+    uint32 idx = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+
+    if((rx_ring[idx].status & E1000_RXD_STAT_DD) == 0){
+      release(&e1000_lock);
+      break;
+    }
+
+    struct mbuf *m = rx_mbufs[idx];
+    m->len = rx_ring[idx].length;
+
+    rx_mbufs[idx] = mbufalloc(0);
+    if(rx_mbufs[idx] == 0)
+      panic("e1000_recv");
+
+    rx_ring[idx].addr = (uint64)rx_mbufs[idx]->head;
+    rx_ring[idx].status = 0;
+    regs[E1000_RDT] = idx;
+
+    release(&e1000_lock);
+
+    net_rx(m);
+  }
 }
 
 void
