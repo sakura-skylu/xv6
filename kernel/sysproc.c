@@ -5,7 +5,9 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
-
+#include "fcntl.h"
+#include "file.h"
+#include "sysfile.c"
 uint64
 sys_exit(void)
 {
@@ -90,4 +92,75 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+
+uint64
+sys_mmap(void)
+{
+  uint64 addr;
+  int len;
+  int prot;
+  int flags;
+  int fd;
+  int offset;
+  struct file *f;
+
+  argaddr(0, &addr);
+  argint(1, &len);
+  argint(2, &prot);
+  argint(3, &flags);
+  argfd(4, &fd, &f);
+  argint(5, &offset);
+
+  if(addr != 0)
+    return -1;
+
+  if(len <= 0)
+    return -1;
+
+  struct proc* p = myproc();
+  struct vma* v = 0;
+  for(int i=0;i<NVMA;i++){
+    if(p->vmas[i].used == 0){
+      v = &p->vmas[i];
+      break;
+    }
+  }
+  if(v==0){
+    return -1;
+  }
+
+  if((prot&PROT_WRITE) && flags == MAP_SHARED && f->writable == 0){
+    return -1;
+  }
+
+  uint64 mapaddr = TRAPFRAME - PGSIZE;
+
+  for(int i = 0; i < NVMA; i++){
+    if(p->vmas[i].used){
+      if(p->vmas[i].addr <= mapaddr)
+        mapaddr = p->vmas[i].addr - PGROUNDUP(len);
+    }
+  }
+
+  mapaddr = PGROUNDDOWN(mapaddr - PGROUNDUP(len));
+
+  v->used = 1;
+  v->addr = mapaddr;
+  v->len = PGROUNDUP(len);
+  v->prot = prot;
+  v->flags = flags;
+  v->file = f;
+  v->offset = offset;
+
+  filedup(f);
+
+  return mapaddr;
+}
+
+uint64
+sys_munmap(void)
+{
+  return -1;
 }

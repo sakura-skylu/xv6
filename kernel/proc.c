@@ -124,7 +124,10 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
-
+  for(int i=0;i<NVMA;i++){
+    p->vmas[i].used = 0;
+  }
+  
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
