@@ -5,7 +5,11 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
-
+#include "spinlock.h"
+#include "sleeplock.h"
+#include "fcntl.h"
+#include "file.h"
+#include "proc.h"
 /*
  * the kernel's page table.
  */
@@ -448,4 +452,107 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+int
+mmap_pagefault(uint64 va){
+  struct proc *p = myproc();
+  struct vma *v = 0;
+
+  // 找到 fault 地址属于哪个 VMA
+  for(int i = 0; i < NVMA; i++){
+    if(p->vmas[i].used &&
+       va >= p->vmas[i].addr &&
+       va < p->vmas[i].addr + p->vmas[i].len){
+      v = &p->vmas[i];
+      break;
+    }
+  }
+
+  if(v == 0)
+    return -1;
+
+  uint64 page_va = PGROUNDDOWN(va);
+
+  char *mem = kalloc();
+  if(mem == 0)
+    return -1;
+
+  memset(mem, 0, PGSIZE);
+
+  // 从文件读入这一页内容
+  ilock(v->file->ip);
+  readi(v->file->ip, 0, (uint64)mem, v->offset + (page_va - v->addr), PGSIZE);
+  iunlock(v->file->ip);
+
+  int perm = PTE_U;
+
+  if(v->prot & PROT_READ)
+    perm |= PTE_R;
+
+  if(v->prot & PROT_WRITE)
+    perm |= PTE_W;
+
+  if(mappages(p->pagetable, page_va, PGSIZE, (uint64)mem, perm) != 0){
+    kfree(mem);
+    return -1;
+  }
+
+  return 0;
+}
+
+int 
+do_munmap(uint64 addr, uint64 len)
+{
+   struct proc *p = myproc();
+  struct vma *v = 0;
+
+  len = PGROUNDUP(len);
+  addr = PGROUNDDOWN(addr);
+
+  for(int i = 0; i < NVMA; i++){
+    if(p->vmas[i].used &&
+       addr >= p->vmas[i].addr &&
+       addr < p->vmas[i].addr + p->vmas[i].len){
+      v = &p->vmas[i];
+      break;
+    }
+  }
+
+  if(v == 0)
+    return -1;
+
+  for(uint64 a = addr; a < addr + len; a += PGSIZE){
+    pte_t *pte = walk(p->pagetable, a, 0);
+
+    if(pte == 0 || (*pte & PTE_V) == 0)
+      continue;
+
+    uint64 pa = PTE2PA(*pte);
+
+    if(v->flags == MAP_SHARED){
+      ilock(v->file->ip);
+      writei(v->file->ip, 0, pa, v->offset + (a - v->addr), PGSIZE);
+      iunlock(v->file->ip);
+    }
+
+    uvmunmap(p->pagetable, a, 1, 1);
+  }
+
+  // 调整 VMA
+  if(addr == v->addr && len == v->len){
+    fileclose(v->file);
+    v->used = 0;
+  } else if(addr == v->addr){
+    v->addr += len;
+    v->len -= len;
+    v->offset += len;
+  } else if(addr + len == v->addr + v->len){
+    v->len -= len;
+  } else {
+    // 实验说不会从中间挖洞
+    return -1;
+  }
+
+  return 0;
 }

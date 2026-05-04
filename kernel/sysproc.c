@@ -6,8 +6,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "fcntl.h"
+#include "fs.h"
+#include "sleeplock.h"
 #include "file.h"
-#include "sysfile.c"
+
 uint64
 sys_exit(void)
 {
@@ -110,7 +112,9 @@ sys_mmap(void)
   argint(1, &len);
   argint(2, &prot);
   argint(3, &flags);
-  argfd(4, &fd, &f);
+  argint(4, &fd);
+  if(fd < 0 || fd >= NOFILE || (f = myproc()->ofile[fd]) == 0)
+    return -1;
   argint(5, &offset);
 
   if(addr != 0)
@@ -162,5 +166,13 @@ sys_mmap(void)
 uint64
 sys_munmap(void)
 {
-  return -1;
+  uint64 addr;
+  int len;
+  argaddr(0, &addr);
+  argint(1, &len);
+
+  if(len <= 0)
+    return -1;
+
+  return do_munmap(addr, len);
 }
