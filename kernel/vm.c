@@ -531,9 +531,11 @@ do_munmap(uint64 addr, uint64 len)
     uint64 pa = PTE2PA(*pte);
 
     if(v->flags == MAP_SHARED){
+      begin_op();
       ilock(v->file->ip);
       writei(v->file->ip, 0, pa, v->offset + (a - v->addr), PGSIZE);
       iunlock(v->file->ip);
+      end_op();
     }
 
     uvmunmap(p->pagetable, a, 1, 1);
